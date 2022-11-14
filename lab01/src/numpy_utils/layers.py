@@ -1,15 +1,31 @@
 import numpy as np
 
+# from torch.nn import (
+#     AdaptiveAvgPool2d,
+#     BatchNorm2d,
+#     SiLU,
+#     Sigmoid,
+#     Dropout
+# )
+# from torchvision.ops import StochasticDepth
+
 
 class Layer:
     def __init__(self):
         self.name = self.__class__.__name__
+        self.train = True
 
     def forward(self, X):
         return X
 
     def backward(self, y):
         ...
+
+    def train(self):
+        self.train = True
+
+    def eval(self):
+        self.trian = False
 
     def _init(self, *dims, mode=None):
         if mode == 'zeros':
@@ -29,6 +45,23 @@ class Layer:
             ) +
             ')'
         )
+
+
+class SequentialLayer(Layer):
+    def __init__(self, *layers):
+        super().__init__()
+        self.sublayers = {
+            f'l{i}': layer
+            for i, layer in enumerate(layers)
+        }
+
+    def forward(self, X):
+        for ln, l in self.sublayers.items():
+            X = l(X)
+        return X
+
+    def backward(self, y):
+        ...
 
 
 class LinearLayer(Layer):
@@ -83,59 +116,7 @@ class ConvLayer(Layer):
         out = np.einsum('bihwkl,oikl->bohw', subm, self.W)
         out += self.b[None, :, None, None]
 
-        # https://stackoverflow.com/questions/72382568/vectorized-way-to-multiply-and-add-specific-axes-in-numpy-array-convolutional-l
-        # x = np.transpose(X, [0, 2, 3, 1])
-        # input_shape = x.shape
-        # x_pad = self._pad(x, self.padding, 0)
-        # input_pad_shape = x_pad.shape
-        # # get the shapes
-        # batch_size, h, w, Cin = input_shape
-        # w1 = np.transpose(self.W, [2, 3, 1, 0])
-        # fh, fw, _, _ = w1.shape
-        # # calculate output sizes; only symmetric padding is possible
-        # hout = (h + 2*self.padding - fh) // self.stride + 1
-        # wout = (w + 2*self.padding - fw) // self.stride + 1
-        # windows = self._windows(array=x_pad, stride_size=self.stride, filter_shapes=(fh, fw),
-        #                 out_width=wout, out_height=hout) # 2D matrix with shape (batch_size, Hout, Wout, fh, fw, Cin)
-        # out3 = np.tensordot(windows, w1, axes=([3,4,5], [0,1,2]))
-        # # self.inputs = x_windows
-        # out3 = np.transpose(out3, [0, 3, 2, 1])
-        # out3 += self.b[None, :, None, None]
-
-        
-
-        # https://stackoverflow.com/questions/72840140/pytorch-conv2d-vs-numpy-results-are-different
-        # padded = np.pad(
-        #     X,
-        #     pad_width=((0,), (0,), (self.padding,), (self.padding,)),
-        #     mode='constant',
-        #     constant_values=(0.,)
-        # )
-        # x = padded
-        # w = self.W
-        
-        # b,  ci, hi, wi = x.shape
-        # co, ci, hk, wk = w.shape
-        # ho = np.floor(1 + (hi - hk) / self.stride).astype(int)
-        # wo = np.floor(1 + (wi - wk) / self.stride).astype(int)
-        # out2 = np.zeros((b, co, ho, wo), dtype=np.float32)
-        
-        # x = np.expand_dims(x, axis=1)
-        # w = np.expand_dims(w, axis=0)
-        # for bi in range(b):
-        #     for i in range(ho):
-        #         for j in range(wo):
-        #             x_windows = x[
-        #                 bi, :, :,
-        #                 i * self.stride:i * self.stride + hk,
-        #                 j * self.stride: j * self.stride + wk
-        #             ]
-        #             res = np.sum(x_windows * w, axis=(2, 3, 4))
-        #             out2[bi, :, i, j] = res
-        
-        # out2 += self.b[None, :, None, None]
-
-        return out  # , out2, out3
+        return out
 
     def _get_windows(self, input, output_size):
         if self.dilation != 0:
@@ -170,11 +151,62 @@ class ConvLayer(Layer):
              self.stride * kern_w_str, kern_h_str, kern_w_str)
         )
 
-    def _windows(self, array, stride_size, filter_shapes, out_height, out_width):
-        strides = (array.strides[0], array.strides[1] * stride_size, array.strides[2] * stride_size, array.strides[1], array.strides[2], array.strides[3])
-        return np.lib.stride_tricks.as_strided(array, shape=(array.shape[0], out_height, out_width, filter_shapes[0], filter_shapes[1], array.shape[3]), strides=strides, writeable=False)
 
-    def _pad(self, array, pad_size, pad_val):
-        return np.pad(array, ((0, 0), (pad_size, pad_size), (pad_size, pad_size), (0, 0)), 'constant', constant_values=(pad_val, pad_val))
+# No overfitting Layers
+class BatchNormLayer(Layer):
+    def __init__(self):
+        super().__init__()
 
 
+class DropoutLayer(Layer):
+    def __init__(self):
+        super().__init__()
+
+
+# Complex Layers
+class Conv2dNormActivationLayer(Layer):
+    def __init__(self):
+        super().__init__()
+
+
+class MBConvLayer(Layer):
+    def __init__(self):
+        super().__init__()
+
+
+class SqueezeExcitationLayer(Layer):
+    def __init__(self):
+        super().__init__()
+
+
+# WTF Layers
+class StochasticDepthLayer(Layer):
+    def __init__(self):
+        super().__init__()
+
+
+# Pooling Layers
+class AdaptiveAvgPool2dLayer(Layer):
+    def __init__(self, output_size):
+        super().__init__()
+        self.output_size = output_size
+
+    def forward(self, X):
+        ...
+
+
+# Activation Layers
+class SigmoidLayer(Layer):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, X):
+        return 1.0 / (1 + np.exp(-1 * X))
+
+
+class SiLULayer(Layer):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, X):
+        return 1.0 / (1 + np.exp(-1 * X)) * X
