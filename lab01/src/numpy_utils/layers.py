@@ -1,11 +1,13 @@
 import numpy as np
+from sklearn.metrics import log_loss
 
 # from torch.nn import (
 #     AdaptiveAvgPool2d,
 #     BatchNorm2d,
 #     SiLU,
 #     Sigmoid,
-#     Dropout
+#     Dropout,
+#     CrossEntropyLoss
 # )
 # from torchvision.ops import StochasticDepth
 
@@ -56,7 +58,7 @@ class SequentialLayer(Layer):
         }
 
     def forward(self, X):
-        for ln, l in self.sublayers.items():
+        for _, l in self.sublayers.items():
             X = l(X)
         return X
 
@@ -105,6 +107,9 @@ class ConvLayer(Layer):
             kernel_size,
             kernel_size
         )
+        self.win = None
+        self.Xin = None
+        self.db, self.dw, self.dx = None, None, None
 
     def forward(self, X):
         n, c, h, w = X.shape
@@ -116,7 +121,25 @@ class ConvLayer(Layer):
         out = np.einsum('bihwkl,oikl->bohw', subm, self.W)
         out += self.b[None, :, None, None]
 
+        self.Xin = X
+        self.win = subm
+
         return out
+
+    def backward(self, dout):
+        padding = self.kernel_size - 1 if self.padding == 0 else self.padding
+
+        dout_windows = self._get_windows(
+            dout, self.Xin.shape, self.kernel_size,
+            padding=padding, stride=1, dilate=self.stride - 1
+        )
+        rot_kern = np.rot90(self.W, 2, axes=(2, 3))
+
+        self.db = np.sum(dout, axis=(0, 2, 3))
+        self.dw = np.einsum('bihwkl,bohw->oikl', self.win, dout)
+        self.dx = np.einsum('bohwkl,oikl->bihw', dout_windows, rot_kern)
+
+        return self.db, self.dw, self.dx
 
     def _get_windows(self, input, output_size):
         if self.dilation != 0:
@@ -210,3 +233,13 @@ class SiLULayer(Layer):
 
     def forward(self, X):
         return 1.0 / (1 + np.exp(-1 * X)) * X
+
+
+# Criterion
+class CrossEntropy(Layer):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, X, y):
+        print(X.shape, y)
+        return log_loss(y, X)
