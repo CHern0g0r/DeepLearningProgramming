@@ -268,11 +268,13 @@ class SoftmaxLayer(Layer):
         self.old_y = np.exp(x) / np.exp(x).sum(axis=1)[:, None]
         return self.old_y
 
-    # def backward(self, grad):
-    #     return self.old_y * (grad - (grad * self.old_y).sum(axis=1)[:, None])
+    def backward(self, grad):
+        return self.old_y * (
+            grad - (grad * self.old_y).sum(axis=1)[:, None]
+        ) / self.old_y.shape[0]
 
-    def derivative(self):
-        return
+    # def derivative(self):
+    #     return
 
 
 # Criterion
@@ -290,8 +292,8 @@ class CrossEntropyCost(Layer):
         sumed = whered.sum(axis=1)
         return self.reduction_fn(sumed)
 
-    # def backward(self):
-    #     return np.where(self.old_y == 1, -1/self.old_x, 0)
+    def backward(self):
+        return np.where(self.old_y == 1, -1/self.old_x, 0)
 
     # def derivative(self):
     #     return -y_true/(y_pred + 10**-100)
@@ -321,4 +323,4 @@ class CrossEntropyLoss(Layer):
         return self.reduction_fn(out)
 
     def backward(self, grad):
-        return self.ls * (grad - (grad * self.ls).sum(axis=1)[:, None])
+        return (self.sm - self.targets) / self.sm.shape[0]
