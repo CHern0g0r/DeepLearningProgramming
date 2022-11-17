@@ -1,5 +1,4 @@
 import numpy as np
-from sklearn.metrics import log_loss
 
 # from torch.nn import (
 #     AdaptiveAvgPool2d,
@@ -12,6 +11,10 @@ from sklearn.metrics import log_loss
 # from torchvision.ops import StochasticDepth
 
 
+def _sigmoid(X):
+    return 1.0 / (1 + np.exp(-1 * X))
+
+
 class Layer:
     def __init__(self):
         self.name = self.__class__.__name__
@@ -20,8 +23,8 @@ class Layer:
     def forward(self, X):
         return X
 
-    def backward(self, y):
-        ...
+    def backward(self, grad):
+        return grad * self.derivative()
 
     def train(self):
         self.train = True
@@ -29,9 +32,16 @@ class Layer:
     def eval(self):
         self.trian = False
 
+    def derivative(self):
+        return 1
+
     def _init(self, *dims, mode=None):
         if mode == 'zeros':
             return np.zeros(dims)
+        elif mode == 'uniform':
+            return np.random.uniform(-1, 1, dims)
+        elif mode == 'uniform01':
+            return np.random.uniform(0, 1, dims)
         return np.random.rand(*dims)
 
     def __call__(self, *args):
@@ -62,7 +72,7 @@ class SequentialLayer(Layer):
             X = l(X)
         return X
 
-    def backward(self, y):
+    def backward(self, grad):
         ...
 
 
@@ -73,10 +83,15 @@ class LinearLayer(Layer):
         self.output = output
         self.W = self._init(self.output, self.input)
         self.b = self._init(self.output)
+        self.inp = None
 
     def forward(self, X):
         res = np.dot(X, self.W.T) + self.b
+        self.inp = X
         return res
+
+    def backward(self, grad):
+        ...
 
 
 class ConvLayer(Layer):
@@ -222,24 +237,88 @@ class AdaptiveAvgPool2dLayer(Layer):
 class SigmoidLayer(Layer):
     def __init__(self):
         super().__init__()
+        self.X = None
 
     def forward(self, X):
-        return 1.0 / (1 + np.exp(-1 * X))
+        self.X = X
+        return _sigmoid(X)
+
+    def backward(self, grad):
+        sig = _sigmoid(self.X)
+        return grad * sig * (1 - sig)
 
 
 class SiLULayer(Layer):
     def __init__(self):
         super().__init__()
+        self.X = None
 
     def forward(self, X):
+        self.X = X
         return 1.0 / (1 + np.exp(-1 * X)) * X
+
+    def derivative(self):
+        sig = _sigmoid(self.X)
+        deriv = sig(1 + self.X * (1 - sig))
+        return deriv
+
+
+class SoftmaxLayer(Layer):
+    def forward(self, x):
+        self.old_y = np.exp(x) / np.exp(x).sum(axis=1)[:, None]
+        return self.old_y
+
+    # def backward(self, grad):
+    #     return self.old_y * (grad - (grad * self.old_y).sum(axis=1)[:, None])
+
+    def derivative(self):
+        return
 
 
 # Criterion
-class CrossEntropy(Layer):
-    def __init__(self):
+class CrossEntropyCost(Layer):
+    def __init__(self, reduction_fn=np.mean):
         super().__init__()
+        self.reduction_fn = reduction_fn
+
+    def forward(self, x, y):
+        self.old_x = x.clip(min=1e-8, max=None)
+        targets = np.zeros_like(x)
+        targets[np.arange(len(x)), y] = 1
+        self.old_y = targets
+        whered = np.where(targets == 1, -np.log(self.old_x), 0)
+        sumed = whered.sum(axis=1)
+        return self.reduction_fn(sumed)
+
+    # def backward(self):
+    #     return np.where(self.old_y == 1, -1/self.old_x, 0)
+
+    # def derivative(self):
+    #     return -y_true/(y_pred + 10**-100)
+
+
+class CrossEntropyLoss(Layer):
+    def __init__(self, reduction_fn=np.mean):
+        super().__init__()
+        self.reduction_fn = reduction_fn
+        self.sm = None
+        self.targets = None
+        self.ls = None
 
     def forward(self, X, y):
-        print(X.shape, y)
-        return log_loss(y, X)
+        targets = np.zeros_like(X)
+        targets[np.arange(len(X)), y] = 1
+
+        sm = np.exp(X) / np.sum(np.exp(X), axis=1)[:, None]
+        out = np.sum(-targets * np.log(sm), axis=1)
+
+        # pred_pr = X[np.arange(len(X)), y]
+        # ls = - np.log(np.exp(pred_pr) / np.sum(np.exp(X), axis=1))
+
+        # self.ls = ls
+        self.sm = sm
+        self.targets = targets
+        return self.reduction_fn(out)
+
+    def backward(self, grad):
+        return self.ls * (grad - (grad * self.ls).sum(axis=1)[:, None])
