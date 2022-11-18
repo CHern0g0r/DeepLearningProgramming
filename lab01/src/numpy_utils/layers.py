@@ -118,7 +118,13 @@ class ConvLayer(Layer):
         out_h = (h - self.kernel_size + 2 * self.padding) // self.stride + 1
         out_w = (w - self.kernel_size + 2 * self.padding) // self.stride + 1
 
-        subm = self._get_windows(X, (n, c, out_h, out_w))
+        subm = self._get_windows(
+            X, (n, c, out_h, out_w),
+            self.kernel_size,
+            self.padding,
+            self.stride,
+            self.dilation
+        )
 
         out = np.einsum('bihwkl,oikl->bohw', subm, self.W)
         out += self.b[None, :, None, None]
@@ -143,8 +149,10 @@ class ConvLayer(Layer):
 
         return dx
 
-    def _get_windows(self, input, output_size):
-        if self.dilation != 0:
+    # input, output_size, kernel_size, padding=0, stride=1, dilate=0
+    def _get_windows(self, input, output_size, kernel_size,
+                     padding=0, stride=1, dilate=0):
+        if dilate != 0:
             input = np.insert(
                 input,
                 range(1, input.shape[2]),
@@ -156,10 +164,10 @@ class ConvLayer(Layer):
                 0, axis=3
             )
 
-        if self.padding != 0:
+        if padding != 0:
             input = np.pad(
                 input,
-                pad_width=((0,), (0,), (self.padding,), (self.padding,)),
+                pad_width=((0,), (0,), (padding,), (padding,)),
                 mode='constant',
                 constant_values=(0.,)
             )
@@ -171,9 +179,9 @@ class ConvLayer(Layer):
         return np.lib.stride_tricks.as_strided(
             input,
             (out_b, out_c, out_h, out_w,
-             self.kernel_size, self.kernel_size),
-            (batch_str, channel_str, self.stride * kern_h_str,
-             self.stride * kern_w_str, kern_h_str, kern_w_str)
+             kernel_size, kernel_size),
+            (batch_str, channel_str, stride * kern_h_str,
+             stride * kern_w_str, kern_h_str, kern_w_str)
         )
 
 
@@ -187,11 +195,16 @@ class OneLayer(Layer):
 
 
 class FlattenLayer(Layer):
+    def __init__(self):
+        super().__init__()
+        self.in_size = None
+
     def forward(self, X):
+        self.in_size = X.shape
         return X.reshape(X.shape[0], -1)
 
     def backward(self, grad):
-        return grad
+        return grad.reshape(self.in_size)
 
 
 class SequentialLayer(Layer):
@@ -212,15 +225,27 @@ class SequentialLayer(Layer):
 
 
 # No overfitting Layers
-class BatchNormLayer(Layer):
+class BatchNorm2dLayer(Layer):
     def __init__(self):
         super().__init__()
 
 
 class DropoutLayer(Layer):
-    def __init__(self):
+    def __init__(self, p=0.5):
         super().__init__()
+        self.p = p
+        self.mask = None
 
+    def forward(self, X):
+        if self.train:
+            self.mask = np.random.binomial(
+                1, self.p, X.shape).astype(np.float32)
+            self.mask *= 1. / (1. - self.p)
+            return self.mask * X
+        return X
+
+    def backward(self, grad):
+        return self.mask * grad / (1. - self.p)
 
 # Complex Layers
 class Conv2dNormActivationLayer(Layer):
