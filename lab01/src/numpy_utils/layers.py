@@ -1,12 +1,15 @@
 import numpy as np
 
 # from torch.nn import (
+#     Linear,
 #     AdaptiveAvgPool2d,
 #     BatchNorm2d,
 #     SiLU,
 #     Sigmoid,
 #     Dropout,
-#     CrossEntropyLoss
+#     CrossEntropyLoss,
+#     Module,
+#     Sequential
 # )
 # from torchvision.ops import StochasticDepth
 
@@ -37,11 +40,13 @@ class Layer:
 
     def _init(self, *dims, mode=None):
         if mode == 'zeros':
-            return np.zeros(dims)
+            return np.zeros(*dims)
         elif mode == 'uniform':
             return np.random.uniform(-1, 1, dims)
         elif mode == 'uniform01':
             return np.random.uniform(0, 1, dims)
+        elif mode == 'ones':
+            return np.ones(*dims)
         return np.random.rand(*dims)
 
     def __call__(self, *args):
@@ -226,8 +231,68 @@ class SequentialLayer(Layer):
 
 # No overfitting Layers
 class BatchNorm2dLayer(Layer):
-    def __init__(self):
+    def __init__(self,
+                 num_features,
+                 eps=1e-05,
+                 momentum=0.1,
+                 affine=True):
         super().__init__()
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.running_mean = self._init(num_features, mode='zeros')
+        self.running_var = self._init(num_features, mode='ones')
+        self.num_batches_tracked = 0
+        self.W = self._init(num_features)
+        self.b = self._init(num_features)
+
+    def forward(self, X):
+        self._check_shape(X)
+
+        exponential_average_factor = 0.0
+
+        if self.train:
+            if self.num_batches_tracked is not None:
+                self.num_batches_tracked += 1
+                if self.momentum is None:
+                    exponential_average_factor = (
+                        1.0 / float(self.num_batches_tracked)
+                    )
+                else:
+                    exponential_average_factor = self.momentum
+
+        if self.train:
+            mean = X.mean(axis=(0, 2, 3))
+            var = X.var(axis=(0, 2, 3))
+            n = np.prod(X.shape) / X.shape[1]
+            self.running_mean = (
+                exponential_average_factor * mean +
+                (1 - exponential_average_factor) * self.running_mean
+            )
+            self.running_var = (
+                exponential_average_factor * var * n / (n - 1) +
+                (1 - exponential_average_factor) * self.running_var
+            )
+        else:
+            mean = self.running_mean
+            var = self.running_var
+
+        X = (
+            (X - mean[None, :, None, None]) /
+            (np.sqrt(var[None, :, None, None] + self.eps))
+        )
+        if self.affine:
+            X = X * self.W[None, :, None, None] + self.b[None, :, None, None]
+
+        return X
+
+    def backward(self, grad):
+        ...
+
+    def _check_shape(self, X):
+        assert len(X.shape) == 4
+        assert X.shape[1] == self.num_features
 
 
 class DropoutLayer(Layer):
@@ -246,6 +311,7 @@ class DropoutLayer(Layer):
 
     def backward(self, grad):
         return self.mask * grad / (1. - self.p)
+
 
 # Complex Layers
 class Conv2dNormActivationLayer(Layer):
