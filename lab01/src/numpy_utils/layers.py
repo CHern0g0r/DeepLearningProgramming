@@ -1,5 +1,7 @@
 import numpy as np
 
+from collections import namedtuple
+
 # from torch.nn import (
 #     Linear,
 #     AdaptiveAvgPool2d,
@@ -18,10 +20,14 @@ def _sigmoid(X):
     return 1.0 / (1 + np.exp(-1 * X))
 
 
+Param = namedtuple('parameter', ['weight', 'grad'])
+
+
 class Layer:
     def __init__(self):
         self.name = self.__class__.__name__
         self.train = True
+        self.params = []
 
     def forward(self, X):
         return X
@@ -37,6 +43,10 @@ class Layer:
 
     def derivative(self):
         return 1
+
+    def zero_grad(self):
+        for param, grad in self.params:
+            setattr(self, grad, None)
 
     def _init(self, *dims, mode=None):
         if mode == 'zeros':
@@ -74,6 +84,10 @@ class LinearLayer(Layer):
         self.inp = None
         self.dW = None
         self.db = None
+        self.params = [
+            Param('W', 'dW'),
+            Param('b', 'db')
+        ]
 
     def forward(self, X):
         res = np.dot(X, self.W.T) + self.b
@@ -116,7 +130,11 @@ class ConvLayer(Layer):
         )
         self.win = None
         self.Xin = None
-        self.db, self.dw = None, None
+        self.db, self.dW = None, None
+        self.params = [
+            Param('W', 'dW'),
+            Param('b', 'db')
+        ]
 
     def forward(self, X):
         n, c, h, w = X.shape
@@ -149,7 +167,7 @@ class ConvLayer(Layer):
         rot_kern = np.rot90(self.W, 2, axes=(2, 3))
 
         self.db = np.sum(dout, axis=(0, 2, 3))
-        self.dw = np.einsum('bihwkl,bohw->oikl', self.win, dout)
+        self.dW = np.einsum('bihwkl,bohw->oikl', self.win, dout)
         dx = np.einsum('bohwkl,oikl->bihw', dout_windows, rot_kern)
 
         return dx
@@ -246,9 +264,13 @@ class BatchNorm2dLayer(Layer):
         self.num_batches_tracked = 0
         self.W = self._init(num_features)
         self.b = self._init(num_features)
+        self.dW = self._init(num_features, mode='zeros')
+        self.db = self._init(num_features, mode='zeros')
+        self.inp = None
 
     def forward(self, X):
         self._check_shape(X)
+        self.inp = X
 
         exponential_average_factor = 0.0
 
@@ -288,7 +310,34 @@ class BatchNorm2dLayer(Layer):
         return X
 
     def backward(self, grad):
-        ...
+        gamma = self.W[None, :, None, None]
+        eps = self.eps
+        B = self.inp.shape[0] * self.inp.shape[2] * self.inp.shape[3]
+
+        mean = self.inp.mean(axis=(0, 2, 3), keepdims=True)
+        variance = self.inp.var(axis=(0, 2, 3), keepdims=True)
+        x_hat = (self.inp - mean) / (np.sqrt(variance + eps))
+
+        dL_dxi_hat = grad * gamma
+        dL_dvar = (-0.5 * dL_dxi_hat * (self.inp - mean)).sum(
+            (0, 2, 3), keepdims=True
+        ) * ((variance + eps) ** -1.5)
+        dL_davg = (-1.0 / np.sqrt(variance + eps) * dL_dxi_hat).sum(
+            (0, 2, 3), keepdims=True
+        ) + (dL_dvar * (-2.0 * (self.inp - mean)).sum(
+            (0, 2, 3), keepdims=True
+        ) / B)
+
+        dX = (
+            (dL_dxi_hat / np.sqrt(variance + eps)) +
+            (2.0 * dL_dvar * (self.inp - mean) / B) +
+            (dL_davg / B)
+        )
+        dW = (grad * x_hat).sum((0, 2, 3), keepdims=True).squeeze()
+        db = (grad).sum((0, 2, 3), keepdims=True).squeeze()
+        self.dW += dW
+        self.db += db
+        return dX
 
     def _check_shape(self, X):
         assert len(X.shape) == 4
