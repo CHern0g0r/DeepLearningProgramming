@@ -28,6 +28,7 @@ class Layer:
         self.name = self.__class__.__name__
         self.train = True
         self.params = []
+        self.subs = []
 
     def forward(self, X):
         return X
@@ -47,6 +48,8 @@ class Layer:
     def zero_grad(self):
         for param, grad in self.params:
             setattr(self, grad, None)
+        for sl in self.subs:
+            getattr(self, sl).zero_grad()
 
     def _init(self, *dims, mode=None):
         if mode == 'zeros':
