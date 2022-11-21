@@ -212,9 +212,60 @@ class ConvLayer(Layer):
         )
 
 
-class DeepthwiseConvLayer(Layer):
-    def __init__(self):
-        super().__init__()
+class DepthwiseConvLayer(ConvLayer):
+    def __init__(self,
+                 channels,
+                 kernel_size,
+                 stride=1,
+                 padding=0,
+                 dilation=1,
+                 bias=True):
+        super().__init__(
+            1,
+            channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            bias
+        )
+        self.c = channels
+
+    def forward(self, X):
+        n, c, h, w = X.shape
+        assert c == self.c
+        out_h = (h - self.kernel_size + 2 * self.padding) // self.stride + 1
+        out_w = (w - self.kernel_size + 2 * self.padding) // self.stride + 1
+
+        subm = self._get_windows(
+            X, (n, c, out_h, out_w),
+            self.kernel_size,
+            self.padding,
+            self.stride,
+            self.dilation
+        )
+        print(subm.shape)
+        print(self.W.shape)
+
+        imgs = []
+        for b in range(n):
+            layers = []
+            for cc in range(c):
+                cur_img = subm[b, cc]
+                cur_w = self.W[cc, 0]
+                print(cur_img.shape, cur_w.shape)
+                layers.append(np.einsum('hwkl,kl->hw', cur_img, cur_w))
+            imgs.append(np.stack(layers, axis=0))
+        out = np.stack(imgs, axis=0)
+
+        # out = np.einsum('bihwkl,oikl->bohw', subm, self.W)
+        # out += self.b[None, :, None, None]
+
+        # self.Xin = X
+        # self.win = subm
+
+        # out = None
+        return out
 
 
 # Aux layers
