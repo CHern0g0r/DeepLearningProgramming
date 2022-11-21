@@ -11,6 +11,7 @@ from collections import namedtuple
 #     Dropout,
 #     CrossEntropyLoss,
 #     Module,
+#     Conv2d,
 #     Sequential
 # )
 # from torchvision.ops import StochasticDepth
@@ -209,6 +210,11 @@ class ConvLayer(Layer):
             (batch_str, channel_str, stride * kern_h_str,
              stride * kern_w_str, kern_h_str, kern_w_str)
         )
+
+
+class DeepthwiseConvLayer(Layer):
+    def __init__(self):
+        super().__init__()
 
 
 # Aux layers
