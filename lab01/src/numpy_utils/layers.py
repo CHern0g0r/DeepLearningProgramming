@@ -54,14 +54,48 @@ class Layer:
 
     def _init(self, *dims, mode=None):
         if mode == 'zeros':
-            return np.zeros(*dims)
+            return np.zeros(dims)
         elif mode == 'uniform':
             return np.random.uniform(-1, 1, dims)
         elif mode == 'uniform01':
             return np.random.uniform(0, 1, dims)
         elif mode == 'ones':
-            return np.ones(*dims)
+            return np.ones(dims)
         return np.random.rand(*dims)
+
+    def _get_windows(self, input, output_size, kernel_size,
+                     padding=0, stride=1, dilate=0):
+        if dilate != 0:
+            input = np.insert(
+                input,
+                range(1, input.shape[2]),
+                0, axis=2
+            )
+            input = np.insert(
+                input,
+                range(1, input.shape[3]),
+                0, axis=3
+            )
+
+        if padding != 0:
+            input = np.pad(
+                input,
+                pad_width=((0,), (0,), (padding,), (padding,)),
+                mode='constant',
+                constant_values=(0.,)
+            )
+
+        in_b, in_c, out_h, out_w = output_size
+        out_b, out_c, _, _ = input.shape
+        batch_str, channel_str, kern_h_str, kern_w_str = input.strides
+
+        return np.lib.stride_tricks.as_strided(
+            input,
+            (out_b, out_c, out_h, out_w,
+             kernel_size, kernel_size),
+            (batch_str, channel_str, stride * kern_h_str,
+             stride * kern_w_str, kern_h_str, kern_w_str)
+        )
 
     def __call__(self, *args):
         return self.forward(*args)
@@ -176,40 +210,6 @@ class ConvLayer(Layer):
 
         return dx
 
-    def _get_windows(self, input, output_size, kernel_size,
-                     padding=0, stride=1, dilate=0):
-        if dilate != 0:
-            input = np.insert(
-                input,
-                range(1, input.shape[2]),
-                0, axis=2
-            )
-            input = np.insert(
-                input,
-                range(1, input.shape[3]),
-                0, axis=3
-            )
-
-        if padding != 0:
-            input = np.pad(
-                input,
-                pad_width=((0,), (0,), (padding,), (padding,)),
-                mode='constant',
-                constant_values=(0.,)
-            )
-
-        in_b, in_c, out_h, out_w = output_size
-        out_b, out_c, _, _ = input.shape
-        batch_str, channel_str, kern_h_str, kern_w_str = input.strides
-
-        return np.lib.stride_tricks.as_strided(
-            input,
-            (out_b, out_c, out_h, out_w,
-             kernel_size, kernel_size),
-            (batch_str, channel_str, stride * kern_h_str,
-             stride * kern_w_str, kern_h_str, kern_w_str)
-        )
-
 
 class DepthwiseConvLayer(ConvLayer):
     def __init__(self,
@@ -249,7 +249,7 @@ class DepthwiseConvLayer(ConvLayer):
         self.win = subm
 
         return out
-    
+
     def backward(self, dout):
         padding = self.kernel_size - 1 if self.padding == 0 else self.padding
 
@@ -451,20 +451,58 @@ class AvgPool2dLayer(Layer):
                  padding=0):
         super().__init__()
         self.kernel_size = kernel_size
-        self.stride = stride
+        self.stride = (
+            stride
+            if stride is not None
+            else kernel_size
+        )
         self.padding = padding
+        self.inp_shape = None
 
-    
+    def forward(self, X):
+        b, c, h, w = self.inp_shape = X.shape
 
-class AdaptiveAvgPool2dLayer(Layer):
+        out_h = (h - self.kernel_size + 2 * self.padding) // self.stride + 1
+        out_w = (w - self.kernel_size + 2 * self.padding) // self.stride + 1
+
+        wins = self._get_windows(
+            X,
+            (b, c, out_h, out_w),
+            self.kernel_size,
+            self.padding,
+            self.stride,
+            dilate=0
+        )
+        means = np.mean(wins, axis=(4, 5))
+        return means
+
+    def backward(self, grad):
+        grad *= 1. / self.kernel_size**2
+        b, c, h, w = grad.shape
+        pre_grad = np.zeros(self.inp_shape)
+        wins = self._get_windows(
+            pre_grad,
+            grad.shape,
+            self.kernel_size
+        )
+        wins += grad[:, :, :, :, None, None]
+        return pre_grad
+
+
+class AdaptiveAvgPool2dLayer(AvgPool2dLayer):
     def __init__(self, output_size):
         super().__init__()
         self.output_size = output_size
+        self.padding = 0
 
     def forward(self, X):
         b, c, h, w = X.shape
-        stride = h // self.output_size
-        kernel_size = h 
+        self.stride = h // self.output_size
+        self.kernel_size = h - (self.output_size - 1) * self.stride
+        return super().forward(X)
+
+    def backward(self, grad):
+        return super().backward(grad)
 
 
 # Activation Layers
