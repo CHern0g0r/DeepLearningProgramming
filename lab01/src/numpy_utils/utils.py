@@ -8,6 +8,8 @@ def save_grad(lst):
 
 
 def ttn(tensor):
+    if isinstance(tensor, np.ndarray):
+        return tensor
     return tensor.detach().numpy()
 
 
@@ -52,7 +54,6 @@ def check_comb(torch_layers,
     else:
         resn = numpy_layers[-1](resn, labeln)
     Xns += [resn]
-
     show('Forward is right', np.allclose(ttn(rest), resn))
     show('but', np.power(ttn(rest) - resn, 2).mean())
 

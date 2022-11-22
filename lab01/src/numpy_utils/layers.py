@@ -121,6 +121,7 @@ class ConvLayer(Layer):
         self.stride = stride
         self.padding = padding
         self.dilation = dilation - 1
+        self.bias = bias
 
         self.b = self._init(
             out_channels,
@@ -135,10 +136,9 @@ class ConvLayer(Layer):
         self.win = None
         self.Xin = None
         self.db, self.dW = None, None
-        self.params = [
-            Param('W', 'dW'),
-            Param('b', 'db')
-        ]
+        self.params = [Param('W', 'dW')]
+        if self.bias:
+            self.params += [Param('b', 'db')]
 
     def forward(self, X):
         n, c, h, w = X.shape
@@ -176,7 +176,6 @@ class ConvLayer(Layer):
 
         return dx
 
-    # input, output_size, kernel_size, padding=0, stride=1, dilate=0
     def _get_windows(self, input, output_size, kernel_size,
                      padding=0, stride=1, dilate=0):
         if dilate != 0:
@@ -218,8 +217,7 @@ class DepthwiseConvLayer(ConvLayer):
                  kernel_size,
                  stride=1,
                  padding=0,
-                 dilation=1,
-                 bias=True):
+                 dilation=1):
         super().__init__(
             1,
             channels,
@@ -227,7 +225,7 @@ class DepthwiseConvLayer(ConvLayer):
             stride,
             padding,
             dilation,
-            bias
+            bias=False
         )
         self.c = channels
 
@@ -244,28 +242,27 @@ class DepthwiseConvLayer(ConvLayer):
             self.stride,
             self.dilation
         )
-        print(subm.shape)
-        print(self.W.shape)
 
-        imgs = []
-        for b in range(n):
-            layers = []
-            for cc in range(c):
-                cur_img = subm[b, cc]
-                cur_w = self.W[cc, 0]
-                print(cur_img.shape, cur_w.shape)
-                layers.append(np.einsum('hwkl,kl->hw', cur_img, cur_w))
-            imgs.append(np.stack(layers, axis=0))
-        out = np.stack(imgs, axis=0)
+        out = np.einsum('bohwkl,oikl->bohw', subm, self.W)
 
-        # out = np.einsum('bihwkl,oikl->bohw', subm, self.W)
-        # out += self.b[None, :, None, None]
+        self.Xin = X
+        self.win = subm
 
-        # self.Xin = X
-        # self.win = subm
-
-        # out = None
         return out
+    
+    def backward(self, dout):
+        padding = self.kernel_size - 1 if self.padding == 0 else self.padding
+
+        dout_windows = self._get_windows(
+            dout, self.Xin.shape, self.kernel_size,
+            padding=padding, stride=1, dilate=self.stride - 1
+        )
+        rot_kern = np.rot90(self.W, 2, axes=(2, 3))
+
+        self.dW = np.einsum('bohwkl,bohw->okl', self.win, dout)[:, None, :, :]
+        dx = np.einsum('bohwkl,oikl->bohw', dout_windows, rot_kern)
+
+        return dx
 
 
 # Aux layers
@@ -304,7 +301,9 @@ class SequentialLayer(Layer):
         return X
 
     def backward(self, grad):
-        ...
+        for _, l in reversed(self.sublayers.items()):
+            grad = l.backward(grad)
+        return grad
 
 
 # No overfitting Layers
@@ -445,13 +444,27 @@ class StochasticDepthLayer(Layer):
 
 
 # Pooling Layers
+class AvgPool2dLayer(Layer):
+    def __init__(self,
+                 kernel_size=1,
+                 stride=None,
+                 padding=0):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+
+    
+
 class AdaptiveAvgPool2dLayer(Layer):
     def __init__(self, output_size):
         super().__init__()
         self.output_size = output_size
 
     def forward(self, X):
-        ...
+        b, c, h, w = X.shape
+        stride = h // self.output_size
+        kernel_size = h 
 
 
 # Activation Layers
