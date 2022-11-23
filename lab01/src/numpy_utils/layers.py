@@ -29,7 +29,7 @@ class Layer:
         self.name = self.__class__.__name__
         self.train = True
         self.params = []
-        self.subs = []
+        self.sublayers = []
 
     def forward(self, X):
         return X
@@ -49,7 +49,7 @@ class Layer:
     def zero_grad(self):
         for param, grad in self.params:
             setattr(self, grad, None)
-        for sl in self.subs:
+        for sl in self.sublayers:
             getattr(self, sl).zero_grad()
 
     def _init(self, *dims, mode=None):
@@ -106,7 +106,10 @@ class Layer:
             ', '.join(
                 f'{k}={v}'
                 for k, v in self.__dict__.items()
-                if k != 'name' and not isinstance(v, np.ndarray)
+                if (
+                    k not in ['name', 'params', 'sublayers'] and
+                    not isinstance(v, np.ndarray)
+                )
             ) +
             ')'
         )
@@ -290,20 +293,27 @@ class FlattenLayer(Layer):
 class SequentialLayer(Layer):
     def __init__(self, *layers):
         super().__init__()
-        self.sublayers = {
-            f'l{i}': layer
-            for i, layer in enumerate(layers)
-        }
+        self.sublayers = layers
 
     def forward(self, X):
-        for _, l in self.sublayers.items():
+        for l in self.sublayers:
             X = l(X)
         return X
 
     def backward(self, grad):
-        for _, l in reversed(self.sublayers.items()):
+        for l in reversed(self.sublayers):
             grad = l.backward(grad)
         return grad
+
+    def __str__(self):
+        return '\n\t'.join([
+            f'{self.name}(',
+            ',\n\t'.join(
+                str(l)
+                for l in self.sublayers
+            ),
+            ')'
+        ])
 
 
 # No overfitting Layers
@@ -326,6 +336,10 @@ class BatchNorm2dLayer(Layer):
         self.dW = self._init(num_features, mode='zeros')
         self.db = self._init(num_features, mode='zeros')
         self.inp = None
+        self.params = [
+            Param('W', 'dW'),
+            Param('b', 'db')
+        ]
 
     def forward(self, X):
         self._check_shape(X)
@@ -422,6 +436,22 @@ class DropoutLayer(Layer):
 
 
 # Complex Layers
+class ResidualLayer(SequentialLayer):
+    def __init__(self, *layers):
+        super().__init__(*layers)
+        self.X = None
+        self.Fx = None
+    
+    def forward(self, X):
+        self.X = X
+        self.Fx = super().forward(X)
+        return self.Fx + X
+
+    def backward(self, grad):
+        dFx = super().backward(grad)
+        return grad + dFx
+
+
 class Conv2dNormActivationLayer(Layer):
     def __init__(self):
         super().__init__()
@@ -432,9 +462,22 @@ class MBConvLayer(Layer):
         super().__init__()
 
 
-class SqueezeExcitationLayer(Layer):
-    def __init__(self):
-        super().__init__()
+class SqueezeExcitationLayer(SequentialLayer):
+    def __init__(self, output, hidden):
+        super().__init__(
+            AdaptiveAvgPool2dLayer(1),
+            ConvLayer(output, hidden, 1),
+            SiLULayer(),
+            ConvLayer(hidden, output, 1),
+            SigmoidLayer()
+        )
+
+    def forward(self, X):
+        y = super().forward(X)
+        return X * y
+
+    def backward(self, grad):
+        return super().backward(grad)
 
 
 # WTF Layers
