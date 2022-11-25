@@ -296,21 +296,21 @@ class SequentialLayer(Layer):
         self.sublayers = layers
 
     def forward(self, X):
-        for l in self.sublayers:
-            X = l(X)
+        for layer in self.sublayers:
+            X = layer(X)
         return X
 
     def backward(self, grad):
-        for l in reversed(self.sublayers):
-            grad = l.backward(grad)
+        for layer in reversed(self.sublayers):
+            grad = layer.backward(grad)
         return grad
 
     def __str__(self):
         return '\n\t'.join([
             f'{self.name}(',
             ',\n\t'.join(
-                str(l)
-                for l in self.sublayers
+                str(layer)
+                for layer in self.sublayers
             ),
             ')'
         ])
@@ -441,7 +441,7 @@ class ResidualLayer(SequentialLayer):
         super().__init__(*layers)
         self.X = None
         self.Fx = None
-    
+
     def forward(self, X):
         self.X = X
         self.Fx = super().forward(X)
