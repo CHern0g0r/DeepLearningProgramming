@@ -1,6 +1,7 @@
 import numpy as np
 
 from collections import namedtuple
+from common.configs import MBconfig, ConvArgs
 
 # from torch.nn import (
 #     Linear,
@@ -268,6 +269,27 @@ class DepthwiseConvLayer(ConvLayer):
         return dx
 
 
+def get_conv(conv_args: ConvArgs):
+    if conv_args.groups == conv_args.in_channels:
+        return DepthwiseConvLayer(
+            channels=conv_args.in_channels,
+            kernel_size=conv_args.kernel_size,
+            stride=conv_args.stride,
+            padding=conv_args.padding,
+            dilation=conv_args.dilation
+        )
+    else:
+        return ConvLayer(
+            in_channels=conv_args.in_channels,
+            out_channels=conv_args.out_channels,
+            kernel_size=conv_args.kernel_size,
+            stride=conv_args.stride,
+            padding=conv_args.padding,
+            dilation=conv_args.dilation,
+            bias=conv_args.bias
+        )
+
+
 # Aux layers
 class OneLayer(Layer):
     def forward(self, *X):
@@ -291,9 +313,10 @@ class FlattenLayer(Layer):
 
 
 class SequentialLayer(Layer):
-    def __init__(self, *layers):
+    def __init__(self, *layers, log=False):
         super().__init__()
         self.sublayers = layers
+        self.log = log
 
     def forward(self, X):
         for layer in self.sublayers:
@@ -301,7 +324,9 @@ class SequentialLayer(Layer):
         return X
 
     def backward(self, grad):
-        for layer in reversed(self.sublayers):
+        for i, layer in enumerate(reversed(self.sublayers)):
+            if self.log:
+                print(i, layer.__class__.__name__)
             grad = layer.backward(grad)
         return grad
 
@@ -453,37 +478,156 @@ class ResidualLayer(SequentialLayer):
 
 
 class Conv2dNormActivationLayer(Layer):
-    def __init__(self):
+    def __init__(self,
+                 conv_args: ConvArgs,
+                 activate: bool = True,
+                 bn: bool = True) -> None:
         super().__init__()
+        self.conv = get_conv(conv_args)
+        self.bn = (
+            BatchNorm2dLayer(conv_args.out_channels)
+            if bn else Layer()
+        )
+        self.act = SiLULayer() if activate else Layer()
+
+    def forward(self, X):
+        X = self.conv(X)
+        X = self.bn(X)
+        X = self.act(X)
+        return X
+
+    def backward(self, grad):
+        grad = self.act.backward(grad)
+        grad = self.bn.backward(grad)
+        grad = self.conv.backward(grad)
+        return grad
 
 
 class MBConvLayer(Layer):
-    def __init__(self):
+    def __init__(self, config: MBconfig) -> None:
         super().__init__()
+
+        self.use_res = (
+            config.stride == 1 and
+            config.input_channels == config.out_channels
+        )
+
+        layers = []
+        expanded_channels = config.adjust_channels(
+            config.input_channels,
+            config.expand_ratio
+        )
+        if expanded_channels != config.input_channels:
+            conv_args = ConvArgs(
+                config.input_channels,
+                expanded_channels
+            )
+            layers.append(
+                get_conv(conv_args)
+            )
+
+        conv_args = ConvArgs(
+            expanded_channels,
+            expanded_channels,
+            kernel_size=config.kernel,
+            stride=config.stride,
+            groups=expanded_channels
+        )
+        layers.append(
+            get_conv(conv_args)
+        )
+
+        squeeze_channels = max(1, config.input_channels // 4)
+        layers.append(SqueezeExcitationLayer(
+            expanded_channels,
+            squeeze_channels
+        ))
+
+        conv_args = ConvArgs(
+            expanded_channels,
+            config.out_channels,
+            kernel_size=1
+        )
+        layers.append(get_conv(conv_args))
+
+        self.block = SequentialLayer(*layers)
+        self.stochastic_depth = StochasticDepthLayer(config.sd_prob)
+        self.out_channels = config.out_channels
+
+    def forward(self, X: np.ndarray) -> np.ndarray:
+        result = self.block(X)
+        if self.use_res:
+            result = self.stochastic_depth(result)
+            result += X
+        return result
+
+    def backward(self, grad):
+        if not self.use_res:
+            return self.block.backward(grad)
+        # dFx = super().backward(grad)
+        # return grad + dFx
+        newgrad = self.stochastic_depth.backward(grad)
+        dFx = self.block.backward(newgrad)
+        return grad + dFx
+        
 
 
 class SqueezeExcitationLayer(SequentialLayer):
-    def __init__(self, output, hidden):
+    def __init__(self, output, hidden,
+                 act=None, scale=None):
         super().__init__(
             AdaptiveAvgPool2dLayer(1),
             ConvLayer(output, hidden, 1),
-            SiLULayer(),
+            (SiLULayer() if act is None else act()),
             ConvLayer(hidden, output, 1),
-            SigmoidLayer()
+            (SigmoidLayer() if scale is None else scale())
         )
+        self.y = None
+        self.X = None
 
     def forward(self, X):
-        y = super().forward(X)
-        return X * y
+        self.X = X
+        self.y = super().forward(X)
+        return X * self.y
 
     def backward(self, grad):
-        return super().backward(grad)
+        # x f'(x) + f(x)
+        # grad * x * f'(x) + grad * f(x)
+        # grad * f'(x) = super().backward(grad)
+        grady = super().backward(grad)
+        gradyx = self.X * grady
+        grady2 = grad * self.y
+        return gradyx + grady2
+
 
 
 # WTF Layers
 class StochasticDepthLayer(Layer):
-    def __init__(self):
+    def __init__(self, p: float = 0.2) -> None:
         super().__init__()
+        self.p = p
+        self.noise = None
+
+    def _stochastic_depth(self, X: np.ndarray, p: float,
+                          training: bool = True) -> np.ndarray:
+        if p < 0.0 or p > 1.0:
+            raise ValueError("fuck")
+        if not training or p == 0.0:
+            return X
+
+        survival_rate = 1.0 - p
+        size = [X.shape[0]] + [1] * (X.ndim - 1)
+        noise = np.random.binomial(1, survival_rate, size).astype(np.float64)
+        if survival_rate > 0.0:
+            noise /= survival_rate
+        self.noise = noise
+        return X * noise
+
+    def forward(self, X: np.ndarray) -> np.ndarray:
+        return self._stochastic_depth(X, self.p, self.train)
+
+    def backward(self, grad):
+        return grad * self.noise
 
 
 # Pooling Layers
