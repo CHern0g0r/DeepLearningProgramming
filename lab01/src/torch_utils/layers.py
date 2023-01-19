@@ -1,9 +1,7 @@
 import torch
 
-from math import ceil
 from torch import nn
-from typing import Union, Optional
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict
 from torch.nn import (
     Conv2d,
     BatchNorm2d,

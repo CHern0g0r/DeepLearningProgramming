@@ -3,7 +3,6 @@ import torch
 
 from torch import nn
 from typing import List
-from torchvision.models import efficientnet_b0
 
 from torch_utils.layers import (
     MBconfig,
