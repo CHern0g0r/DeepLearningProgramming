@@ -15,7 +15,8 @@ from numpy_utils.layers import (
     LinearLayer,
     FlattenLayer,
     Conv2dNormActivationLayer,
-    MBConvLayer
+    MBConvLayer,
+    get_conv
 )
 
 
@@ -28,6 +29,10 @@ class EfficientNetNumpy(Layer):
         super().__init__()
 
         self.sdp = stochastic_depth_prob
+        # first_args = ConvArgs(
+        #     3, config_list[0].input_channels, 3, 2
+        # )
+        # self.in_layer = Conv2dNormActivationLayer(first_args)
         self.backbone = self._create_from_configs(config_list)
         self.pool = AdaptiveAvgPool2dLayer(1)
         self.flat = FlattenLayer()
@@ -37,6 +42,7 @@ class EfficientNetNumpy(Layer):
         ])
 
     def forward(self, x: np.ndarray) -> np.ndarray:
+        # x = self.in_layer(x)
         x = self.backbone(x)
 
         x = self.pool(x)
@@ -51,6 +57,7 @@ class EfficientNetNumpy(Layer):
         grad = self.flat.backward(grad)
         grad = self.pool.backward(grad)
         grad = self.backbone.backward(grad)
+        # grad = self.in_layer.backward(grad)
         return grad
 
     def _create_from_configs(self,
@@ -58,12 +65,12 @@ class EfficientNetNumpy(Layer):
                              last_channel: int = None) -> SequentialLayer:
         layers = []
 
-        first_args = ConvArgs(
-            3, config_list[0].input_channels, 3, 2
-        )
-        layers.append(
-            Conv2dNormActivationLayer(first_args)
-        )
+        # first_args = ConvArgs(
+        #     3, config_list[0].input_channels, 3, 2
+        # )
+        # layers.append(
+        #     Conv2dNormActivationLayer(first_args)
+        # )
 
         total_layers = sum(cfg.num_layers for cfg in config_list)
         cur_layer = 0

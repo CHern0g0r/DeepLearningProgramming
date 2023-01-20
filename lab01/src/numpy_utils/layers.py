@@ -1,5 +1,6 @@
 import numpy as np
 
+from itertools import product
 from collections import namedtuple
 from common.configs import MBconfig, ConvArgs
 
@@ -152,6 +153,7 @@ class ConvLayer(Layer):
                  dilation=1,
                  bias=True):
         super().__init__()
+        self.fuck = False
 
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -206,7 +208,14 @@ class ConvLayer(Layer):
             dout, self.Xin.shape, self.kernel_size,
             padding=padding, stride=1, dilate=self.stride - 1
         )
+        if self.fuck:
+            for pr in product(*(list(map(lambda x: reversed(list(range(x))), dout_windows.shape)))):
+                print(pr)
+                dout_windows[pr] += 0.002
+
         rot_kern = np.rot90(self.W, 2, axes=(2, 3))
+        print('-'*30)
+        print(self.W.shape, dout.shape, self.kernel_size, self.Xin.shape, padding, self.stride, sep='\n')
 
         self.db = np.sum(dout, axis=(0, 2, 3))
         self.dW = np.einsum('bihwkl,bohw->oikl', self.win, dout)
