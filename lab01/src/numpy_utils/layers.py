@@ -26,6 +26,33 @@ def _sigmoid(X):
 Param = namedtuple('parameter', ['weight', 'grad'])
 
 
+def traverse(layer, func, f1=lambda x: x):
+    result = []
+    if func(layer):
+        result.append(f1(layer))
+    for la in layer.sublayers:
+        result += traverse(la, func, f1)
+    return result
+
+
+# def get_paremeterized_layers(layer):
+#     result = []
+#     if layer.params:
+#         result.append(layer)
+#     for la in layer.sublayers:
+#         result += get_paremeterized_layers(la)
+#     return result
+
+
+def is_learnable(layer):
+    params = getattr(layer, 'params')
+    return bool(params)
+
+
+def get_paremeterized_layers(layer):
+    return traverse(layer, is_learnable)
+
+
 class Layer:
     def __init__(self):
         self.name = self.__class__.__name__
@@ -67,6 +94,15 @@ class Layer:
 
     def _get_windows(self, input, output_size, kernel_size,
                      padding=0, stride=1, dilate=0):
+
+        if padding != 0:
+            input = np.pad(
+                input,
+                pad_width=((0,), (0,), (padding,), (padding,)),
+                mode='constant',
+                constant_values=(0.,)
+            )
+
         if dilate != 0:
             input = np.insert(
                 input,
@@ -77,14 +113,6 @@ class Layer:
                 input,
                 range(1, input.shape[3]),
                 0, axis=3
-            )
-
-        if padding != 0:
-            input = np.pad(
-                input,
-                pad_width=((0,), (0,), (padding,), (padding,)),
-                mode='constant',
-                constant_values=(0.,)
             )
 
         in_b, in_c, out_h, out_w = output_size
@@ -209,13 +237,14 @@ class ConvLayer(Layer):
             padding=padding, stride=1, dilate=self.stride - 1
         )
         if self.fuck:
-            for pr in product(*(list(map(lambda x: reversed(list(range(x))), dout_windows.shape)))):
+            for pr in product(*(list(map(
+                              lambda x: reversed(list(range(x))),
+                              dout_windows.shape
+                              )))):
                 print(pr)
                 dout_windows[pr] += 0.002
 
         rot_kern = np.rot90(self.W, 2, axes=(2, 3))
-        print('-'*30)
-        print(self.W.shape, dout.shape, self.kernel_size, self.Xin.shape, padding, self.stride, sep='\n')
 
         self.db = np.sum(dout, axis=(0, 2, 3))
         self.dW = np.einsum('bihwkl,bohw->oikl', self.win, dout)
@@ -486,7 +515,7 @@ class ResidualLayer(SequentialLayer):
         return grad + dFx
 
 
-class Conv2dNormActivationLayer(Layer):
+class Conv2dNormActivationLayer(SequentialLayer):
     def __init__(self,
                  conv_args: ConvArgs,
                  activate: bool = True,
@@ -498,6 +527,11 @@ class Conv2dNormActivationLayer(Layer):
             if bn else Layer()
         )
         self.act = SiLULayer() if activate else Layer()
+        self.sublayers = [
+            self.conv,
+            self.bn,
+            self.act
+        ]
 
     def forward(self, X):
         X = self.conv(X)
@@ -512,7 +546,7 @@ class Conv2dNormActivationLayer(Layer):
         return grad
 
 
-class MBConvLayer(Layer):
+class MBConvLayer(SequentialLayer):
     def __init__(self, config: MBconfig) -> None:
         super().__init__()
 
@@ -532,7 +566,7 @@ class MBConvLayer(Layer):
                 expanded_channels
             )
             layers.append(
-                get_conv(conv_args)
+                Conv2dNormActivationLayer(conv_args)
             )
 
         conv_args = ConvArgs(
@@ -543,7 +577,7 @@ class MBConvLayer(Layer):
             groups=expanded_channels
         )
         layers.append(
-            get_conv(conv_args)
+            Conv2dNormActivationLayer(conv_args)
         )
 
         squeeze_channels = max(1, config.input_channels // 4)
@@ -557,11 +591,12 @@ class MBConvLayer(Layer):
             config.out_channels,
             kernel_size=1
         )
-        layers.append(get_conv(conv_args))
+        layers.append(Conv2dNormActivationLayer(conv_args))
 
         self.block = SequentialLayer(*layers)
         self.stochastic_depth = StochasticDepthLayer(config.sd_prob)
         self.out_channels = config.out_channels
+        self.sublayers = [self.block]
 
     def forward(self, X: np.ndarray) -> np.ndarray:
         result = self.block(X)
@@ -578,7 +613,6 @@ class MBConvLayer(Layer):
         newgrad = self.stochastic_depth.backward(grad)
         dFx = self.block.backward(newgrad)
         return grad + dFx
-        
 
 
 class SqueezeExcitationLayer(SequentialLayer):
@@ -607,7 +641,6 @@ class SqueezeExcitationLayer(SequentialLayer):
         gradyx = self.X * grady
         grady2 = grad * self.y
         return gradyx + grady2
-
 
 
 # WTF Layers

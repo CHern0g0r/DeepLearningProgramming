@@ -1,5 +1,4 @@
 import copy
-import numpy as np
 
 from typing import List
 
@@ -8,31 +7,24 @@ from common.configs import (
     MBconfig
 )
 from numpy_utils.layers import (
-    Layer,
     AdaptiveAvgPool2dLayer,
     SequentialLayer,
     DropoutLayer,
     LinearLayer,
     FlattenLayer,
     Conv2dNormActivationLayer,
-    MBConvLayer,
-    get_conv
+    MBConvLayer
 )
 
 
-class EfficientNetNumpy(Layer):
+class EfficientNetNumpy(SequentialLayer):
     def __init__(self,
                  config_list: List[MBconfig],
                  out_fts: int = 1000,
                  stochastic_depth_prob: float = 0.2
                  ):
-        super().__init__()
 
         self.sdp = stochastic_depth_prob
-        # first_args = ConvArgs(
-        #     3, config_list[0].input_channels, 3, 2
-        # )
-        # self.in_layer = Conv2dNormActivationLayer(first_args)
         self.backbone = self._create_from_configs(config_list)
         self.pool = AdaptiveAvgPool2dLayer(1)
         self.flat = FlattenLayer()
@@ -40,37 +32,43 @@ class EfficientNetNumpy(Layer):
             DropoutLayer(p=0.2),
             LinearLayer(1280, out_fts)
         ])
+        super().__init__(
+            self.backbone,
+            self.pool,
+            self.flat,
+            self.clf
+        )
 
-    def forward(self, x: np.ndarray) -> np.ndarray:
-        # x = self.in_layer(x)
-        x = self.backbone(x)
+    # def forward(self, x: np.ndarray) -> np.ndarray:
+    #     # x = self.in_layer(x)
+    #     x = self.backbone(x)
 
-        x = self.pool(x)
-        x = self.flat(x)
+    #     x = self.pool(x)
+    #     x = self.flat(x)
 
-        x = self.clf(x)
+    #     x = self.clf(x)
 
-        return x
+    #     return x
 
-    def backward(self, grad: np.ndarray) -> np.ndarray:
-        grad = self.clf.backward(grad)
-        grad = self.flat.backward(grad)
-        grad = self.pool.backward(grad)
-        grad = self.backbone.backward(grad)
-        # grad = self.in_layer.backward(grad)
-        return grad
+    # def backward(self, grad: np.ndarray) -> np.ndarray:
+    #     grad = self.clf.backward(grad)
+    #     grad = self.flat.backward(grad)
+    #     grad = self.pool.backward(grad)
+    #     grad = self.backbone.backward(grad)
+    #     # grad = self.in_layer.backward(grad)
+    #     return grad
 
     def _create_from_configs(self,
                              config_list: List[MBconfig],
                              last_channel: int = None) -> SequentialLayer:
         layers = []
 
-        # first_args = ConvArgs(
-        #     3, config_list[0].input_channels, 3, 2
-        # )
-        # layers.append(
-        #     Conv2dNormActivationLayer(first_args)
-        # )
+        first_args = ConvArgs(
+            3, config_list[0].input_channels, 3, 2
+        )
+        layers.append(
+            Conv2dNormActivationLayer(first_args)
+        )
 
         total_layers = sum(cfg.num_layers for cfg in config_list)
         cur_layer = 0

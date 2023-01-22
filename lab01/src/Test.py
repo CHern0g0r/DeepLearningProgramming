@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import faulthandler
 from torch import nn
+from torch.optim import NAdam
 from torch_utils.models import EfficientNet
 from torch_utils.layers import ConvBNSiLU
 from numpy_utils.models import EfficientNetNumpy
@@ -10,63 +11,23 @@ from numpy_utils.layers import (
     CrossEntropyLoss,
     Conv2dNormActivationLayer,
     FlattenLayer,
-    get_conv
+    get_conv,
+    get_paremeterized_layers,
+    BatchNorm2dLayer,
+    traverse
 )
 from numpy_utils.utils import (
     check_comb,
     ttn
 )
+from numpy_utils.optimizer import NAdamOpt
 from common.configs import MBconfig, ConvArgs
+from train_utils.train import (
+    train_epoch,
+    val_epoch,
+    get_dataloader
+)
 
-
-def get_windows(input, output_size, kernel_size,
-                padding=0, stride=1, dilate=0):
-    if dilate != 0:
-        input = np.insert(
-            input,
-            range(1, input.shape[2]),
-            0, axis=2
-        )
-        input = np.insert(
-            input,
-            range(1, input.shape[3]),
-            0, axis=3
-        )
-
-    if padding != 0:
-        input = np.pad(
-            input,
-            pad_width=((0,), (0,), (padding,), (padding,)),
-            mode='constant',
-            constant_values=(0.,)
-        )
-
-    in_b, in_c, out_h, out_w = output_size
-    out_b, out_c, _, _ = input.shape
-    batch_str, channel_str, kern_h_str, kern_w_str = input.strides
-
-    return np.lib.stride_tricks.as_strided(
-            input,
-            (out_b, out_c, out_h, out_w,
-             kernel_size, kernel_size),
-            (batch_str, channel_str, stride * kern_h_str,
-             stride * kern_w_str, kern_h_str, kern_w_str)
-    )
-
-
-def test():
-    W = np.random.rand(32, 3, 3, 3)
-    dout = np.random.rand(8, 32, 128, 128)
-
-    dout_windows = get_windows(
-        dout, (8, 3, 256, 256), 3,
-        padding=1, stride=1, dilate=1
-    )
-    rot_kern = np.rot90(W, 2, axes=(2, 3))
-
-    db = np.sum(dout, axis=(0, 2, 3))
-    dx = np.einsum('bohwkl,oikl->bihw', dout_windows, rot_kern)
-    print(db.shape, dx.shape)
 
 if __name__ == '__main__':
     e = EfficientNet([
@@ -104,28 +65,45 @@ if __name__ == '__main__':
     Xn = ttn(X)
     yt = torch.randint(0, 1000, (8,))
     ytn = ttn(yt)
-    
-    # print(y.shape)
-    # print(yn.shape)
 
-    first_args = ConvArgs(
-        3, 32, 3, 2
-    )
-    cn = Conv2dNormActivationLayer(first_args)
+    layers = get_paremeterized_layers(en)
+    for layer in layers:
+        for param in layer.params:
+            print(np.sum(getattr(layer, param.weight)))
 
-    faulthandler.enable()
-    # res = check_comb([e, crit], [cn, en, critn], X, yt, return_grad=True)
+    opt = NAdamOpt(en)
 
+    y = en(Xn)
+    loss = critn(y, ytn)
+    grad = critn.backward()
+    en.backward(grad)
 
+    opt.step()
 
+    for layer in layers:
+        for param in layer.params:
+            print(np.sum(getattr(layer, param.weight)))
 
-    X = torch.rand((4, 3, 256, 256), requires_grad=True)
-    Xn = ttn(X)
-    yt = torch.randint(0, 1000, (4,))
-    ytn = ttn(yt)
+    print(sum(
+        1 for m in e.modules()
+        if isinstance(m, (
+            nn.Conv2d,
+            nn.Linear,
+            nn.BatchNorm2d
+        ))
+    ))
 
-    c = ConvBNSiLU(first_args)
-    f = nn.Flatten()
-    fn = FlattenLayer()
-    print(c(X).shape)
-    res = check_comb([c, f, crit], [cn, fn, critn], X, yt, return_grad=True)
+    # faulthandler.enable()
+    # res = check_comb([e, crit], [en, critn], X, yt, return_grad=True)
+
+    # X = torch.rand((4, 3, 256, 256), requires_grad=True)
+    # Xn = ttn(X)
+    # yt = torch.randint(0, 1000, (4,))
+    # ytn = ttn(yt)
+
+    # x1 = cn(Xn)
+    # x2 = en(x1)
+    # res = critn(x2, ytn)
+    # grad0 = critn.backward()
+    # grad1 = en.backward(grad0)
+    # grad2 = cn.backward(grad1)
