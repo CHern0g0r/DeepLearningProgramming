@@ -83,27 +83,3 @@ if __name__ == '__main__':
     for layer in layers:
         for param in layer.params:
             print(np.sum(getattr(layer, param.weight)))
-
-    print(sum(
-        1 for m in e.modules()
-        if isinstance(m, (
-            nn.Conv2d,
-            nn.Linear,
-            nn.BatchNorm2d
-        ))
-    ))
-
-    # faulthandler.enable()
-    # res = check_comb([e, crit], [en, critn], X, yt, return_grad=True)
-
-    # X = torch.rand((4, 3, 256, 256), requires_grad=True)
-    # Xn = ttn(X)
-    # yt = torch.randint(0, 1000, (4,))
-    # ytn = ttn(yt)
-
-    # x1 = cn(Xn)
-    # x2 = en(x1)
-    # res = critn(x2, ytn)
-    # grad0 = critn.backward()
-    # grad1 = en.backward(grad0)
-    # grad2 = cn.backward(grad1)
