@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 def get_dataloader(img_path='../data/train',
                    ann_path='../data/train1.csv',
-                   batch_size=16,
+                   batch_size=32,
                    lendataset=8126
                    ):
     trans = [
@@ -78,9 +78,9 @@ def train_epoch(epoch,
     labels = np.array([])
     n = len(dataloader)
     get_pred = (
-        np.max
+        np.argmax
         if numpy
-        else torch.max
+        else lambda x, y: torch.max(x, y).indices
     )
 
     for i, data in tqdm(enumerate(dataloader),
@@ -95,7 +95,7 @@ def train_epoch(epoch,
 
         y = model(imgs)
         loss = criterion(y, target)
-        _, pred = get_pred(y, 1)
+        pred = get_pred(y, 1)
 
         if numpy:
             grad0 = criterion.backward()
@@ -126,9 +126,9 @@ def val_epoch(epoch,
     labels = np.array([])
     n = len(dataloader)
     get_pred = (
-        np.max
+        np.argmax
         if numpy
-        else torch.max
+        else lambda x, y: torch.max(x, y).indices
     )
 
     for i, data in tqdm(enumerate(dataloader),
@@ -141,7 +141,7 @@ def val_epoch(epoch,
 
         y = model(imgs)
         loss = criterion(y, target)
-        _, pred = get_pred(y, 1)
+        pred = get_pred(y, 1)
 
         if not numpy:
             loss = loss.item()
